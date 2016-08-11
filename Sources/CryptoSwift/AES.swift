@@ -434,13 +434,15 @@ extension AES {
         private var offset: Int = 0
         private var offsetToRemove: Int = 0
 
-        init(aes: AES) {
+        public init(aes: AES, encryptBlock: CipherOperationOnBlock? = nil) {
             self.padding = aes.padding;
 
+            let block = encryptBlock == nil ? aes.encryptBlock : encryptBlock!
+            
             switch (aes.blockMode) {
             case .CFB, .OFB, .CTR:
                 // CFB, OFB, CTR uses encryptBlock to decrypt
-                self.worker = aes.blockMode.worker(aes.iv, cipherOperation: aes.encryptBlock)
+                self.worker = aes.blockMode.worker(aes.iv, cipherOperation: block)
             default:
                 self.worker = aes.blockMode.worker(aes.iv, cipherOperation: aes.decryptBlock)
             }

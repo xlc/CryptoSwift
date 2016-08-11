@@ -298,7 +298,7 @@ final class AESTests: XCTestCase {
     func testAES_decrypt_ctr_seek() {
         let key:Array<UInt8> = [0x52, 0x72, 0xb5, 0x9c, 0xab, 0x07, 0xc5, 0x01, 0x11, 0x7a, 0x39, 0xb6, 0x10, 0x35, 0x87, 0x02];
         let iv:Array<UInt8> = [0x00, 0x01, 0x02, 0x03, 0x00, 0x01, 0x02, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01]
-        var plaintext:Array<UInt8> = Array<UInt8>(repeating: 0, count: 6000)
+        var plaintext:Array<UInt8> = Array<UInt8>(count: 6000, repeatedValue: 0)
         
         for i in 0..<plaintext.count / 6 {
             let s = String(format: "%05d", i).utf8.map {$0}
@@ -314,25 +314,34 @@ final class AESTests: XCTestCase {
         let encrypted = try! aes.encrypt(plaintext)
 
         var decryptor = aes.makeDecryptor()
-        decryptor.seek(to: 2)
+        decryptor.seek(2)
         var part1 = try! decryptor.update(withBytes: Array(encrypted[2..<5]))
         part1 += try! decryptor.finish()
         XCTAssertEqual(part1, Array(plaintext[2..<5]), "seek decryption failed")
 
-        decryptor.seek(to: 1000)
+        decryptor.seek(1000)
         var part2 = try! decryptor.update(withBytes: Array(encrypted[1000..<1200]))
         part2 += try! decryptor.finish()
         XCTAssertEqual(part2, Array(plaintext[1000..<1200]), "seek decryption failed")
 
-        decryptor.seek(to: 5500)
+        decryptor.seek(5500)
         var part3 = try! decryptor.update(withBytes: Array(encrypted[5500..<6000]))
         part3 += try! decryptor.finish()
         XCTAssertEqual(part3, Array(plaintext[5500..<6000]), "seek decryption failed")
 
-        decryptor.seek(to: 0)
+        decryptor.seek(0)
         var part4 = try! decryptor.update(withBytes: Array(encrypted[0..<80]))
         part4 += try! decryptor.finish()
         XCTAssertEqual(part4, Array(plaintext[0..<80]), "seek decryption failed")
+        
+        measureBlock {
+            
+            decryptor.seek(0)
+            var part5 = try! decryptor.update(withBytes: encrypted)
+            part5 += try! decryptor.finish()
+            XCTAssertEqual(part5, plaintext, "seek decryption failed")
+            
+        }
     }
 
 //    func testAES_encrypt_performance() {
@@ -368,4 +377,79 @@ final class AESTests: XCTestCase {
         XCTAssertTrue(decrypted! != plaintext, "failed")
     }
 
+    func testCC() {
+        
+        let key:Array<UInt8> = [0x52, 0x72, 0xb5, 0x9c, 0xab, 0x07, 0xc5, 0x01, 0x11, 0x7a, 0x39, 0xb6, 0x10, 0x35, 0x87, 0x02];
+        let iv:Array<UInt8> = [0x00, 0x01, 0x02, 0x03, 0x00, 0x01, 0x02, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01]
+        var plaintext:Array<UInt8> = Array<UInt8>(count: 6000, repeatedValue: 0)
+        
+        for i in 0..<plaintext.count / 6 {
+            let s = String(format: "%05d", i).utf8.map {$0}
+            plaintext[i * 6 + 0] = s[0];
+            plaintext[i * 6 + 1] = s[1];
+            plaintext[i * 6 + 2] = s[2];
+            plaintext[i * 6 + 3] = s[3];
+            plaintext[i * 6 + 4] = s[4];
+            plaintext[i * 6 + 5] = "|".utf8.first!;
+        }
+        
+        let aes = try! AES(key: key, iv:iv, blockMode: .CTR, padding: NoPadding())
+        let encrypted = try! aes.encrypt(plaintext)
+        
+        var cryptor: CCCryptorRef = nil
+        let status = CCCryptorCreateWithMode(CCOperation(kCCEncrypt),
+                                             CCMode(kCCModeECB),
+                                             CCAlgorithm(kCCAlgorithmAES128),
+                                             CCPadding(ccNoPadding),
+                                             iv,
+                                             key,
+                                             key.count,
+                                             nil, 0, 0, 0,
+                                             &cryptor)
+        assert(status == CCCryptorStatus(kCCSuccess))
+        
+        var decryptor = AES.Decryptor(aes: aes) { data in
+            let outsize = CCCryptorGetOutputLength(cryptor, kCCBlockSizeAES128, true);
+            var buffer = [UInt8](count: outsize, repeatedValue: 0)
+            var movedBytes = 0
+            
+            let status = CCCryptorUpdate(cryptor, data, data.count, &buffer, buffer.count, &movedBytes)
+            assert(status == CCCryptorStatus(kCCSuccess))
+            
+            CCCryptorReset(cryptor, iv)
+            
+            return buffer
+        }
+        
+        decryptor.seek(2)
+        var part1 = try! decryptor.update(withBytes: Array(encrypted[2..<5]))
+        part1 += try! decryptor.finish()
+        XCTAssertEqual(part1, Array(plaintext[2..<5]), "seek decryption failed")
+        
+        decryptor.seek(1000)
+        var part2 = try! decryptor.update(withBytes: Array(encrypted[1000..<1200]))
+        part2 += try! decryptor.finish()
+        XCTAssertEqual(part2, Array(plaintext[1000..<1200]), "seek decryption failed")
+        
+        decryptor.seek(5500)
+        var part3 = try! decryptor.update(withBytes: Array(encrypted[5500..<6000]))
+        part3 += try! decryptor.finish()
+        XCTAssertEqual(part3, Array(plaintext[5500..<6000]), "seek decryption failed")
+        
+        decryptor.seek(0)
+        var part4 = try! decryptor.update(withBytes: Array(encrypted[0..<80]))
+        part4 += try! decryptor.finish()
+        XCTAssertEqual(part4, Array(plaintext[0..<80]), "seek decryption failed")
+        
+        measureBlock {
+        
+        decryptor.seek(0)
+        var part5 = try! decryptor.update(withBytes: encrypted)
+        part5 += try! decryptor.finish()
+        XCTAssertEqual(part5, plaintext, "seek decryption failed")
+            
+        }
+        
+        CCCryptorRelease(cryptor)
+    }
 }
